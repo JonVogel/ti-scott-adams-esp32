@@ -22,12 +22,19 @@ set "ACTION=%~1"
 set "PORT_ARG=%~2"
 
 REM If the user passed only a COM port and no action, treat the first
-REM arg as the port instead.
+REM arg as the port instead. Match "COM" + digits (case-insensitive) so
+REM real action names like "compile" don't get misclassified as ports.
 if "!PORT_ARG!"=="" (
   set "FIRST=!ACTION!"
   if /i "!FIRST:~0,3!"=="COM" (
-    set "PORT_ARG=!ACTION!"
-    set "ACTION="
+    set "TAIL=!FIRST:~3!"
+    set "ISPORT=1"
+    for /f "delims=0123456789" %%a in ("!TAIL!") do set "ISPORT=0"
+    if "!TAIL!"=="" set "ISPORT=0"
+    if "!ISPORT!"=="1" (
+      set "PORT_ARG=!ACTION!"
+      set "ACTION="
+    )
   )
 )
 

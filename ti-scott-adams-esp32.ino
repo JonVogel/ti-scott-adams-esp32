@@ -29,6 +29,7 @@
 #include "ti_font.h"
 #include "ble_keyboard.h"
 #include "file_io.h"
+#include "scott_dat.h"
 
 // ---------------------------------------------------------------------------
 // ESP32-8048S043C (Sunton 4.3" 800x480 RGB) pin map + display geometry
@@ -719,8 +720,119 @@ static void cmdHelp()
   printLine("  DIR          list .DAT files");
   printLine("  COPY NAME    SD -> FLASH");
   printLine("  COPYALL      copy every .DAT");
+  printLine("  LOAD NAME    parse + show summary");
   printLine("  PLAY NAME    (not yet impl.)");
   printLine("  BYE          restart");
+}
+
+// Resolve a user-supplied .DAT name onto a (fs, path) pair.
+// Looks in FLASH first (root), then SD /scottadams/, then SD /.
+static bool findDat(const char* name, fs::FS*& outFs,
+                    char* outPath, int outSize)
+{
+  char buf[64];
+
+  // FLASH: /NAME
+  snprintf(buf, sizeof(buf), "/%s", name);
+  if (LittleFS.exists(buf))
+  {
+    outFs = &LittleFS;
+    snprintf(outPath, outSize, "%s", buf);
+    return true;
+  }
+
+  if (fio::g_sdOk)
+  {
+    snprintf(buf, sizeof(buf), "/scottadams/%s", name);
+    if (SD.exists(buf))
+    {
+      outFs = &SD;
+      snprintf(outPath, outSize, "%s", buf);
+      return true;
+    }
+    snprintf(buf, sizeof(buf), "/%s", name);
+    if (SD.exists(buf))
+    {
+      outFs = &SD;
+      snprintf(outPath, outSize, "%s", buf);
+      return true;
+    }
+  }
+  return false;
+}
+
+static void cmdLoad(const char* name)
+{
+  if (!name || !*name)
+  {
+    printLine("Usage: LOAD name.dat");
+    return;
+  }
+
+  fs::FS* fs = nullptr;
+  char path[64];
+  if (!findDat(name, fs, path, sizeof(path)))
+  {
+    char msg[40];
+    snprintf(msg, sizeof(msg), "Not found: %s", name);
+    printLine(msg);
+    return;
+  }
+
+  uint32_t heapBefore = ESP.getFreeHeap();
+  uint32_t psramBefore = ESP.getFreePsram();
+  uint32_t t0 = millis();
+
+  scott::Game g;
+  char err[40] = {0};
+  bool ok = g.load(*fs, path, err, sizeof(err));
+
+  uint32_t dt = millis() - t0;
+
+  if (!ok)
+  {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Parse error: %s", err);
+    printLine(msg);
+    return;
+  }
+
+  uint32_t heapAfter = ESP.getFreeHeap();
+  uint32_t psramAfter = ESP.getFreePsram();
+
+  char line[40];
+  snprintf(line, sizeof(line), "Loaded %s in %ums", path, (unsigned)dt);
+  printLine(line);
+
+  snprintf(line, sizeof(line), "Items:%-3d Actions:%d",
+           g.h.numItems + 1, g.h.numActions + 1);
+  printLine(line);
+
+  snprintf(line, sizeof(line), "Words:%-3d (%d-char) Rooms:%d",
+           g.h.numWords + 1, g.h.wordLen, g.h.numRooms + 1);
+  printLine(line);
+
+  snprintf(line, sizeof(line), "Treasures:%d in room %d",
+           g.h.numTreasures, g.h.treasureRoom);
+  printLine(line);
+
+  snprintf(line, sizeof(line), "Start:%d Carry:%d Light:%d",
+           g.h.startRoom, g.h.maxCarry, g.h.lightTime);
+  printLine(line);
+
+  snprintf(line, sizeof(line), "Messages:%d", g.h.numMessages + 1);
+  printLine(line);
+
+  snprintf(line, sizeof(line), "Trailer v%d adv%d 0x%04x",
+           g.trailerVersion, g.trailerAdvNum, g.trailerMagic);
+  printLine(line);
+
+  snprintf(line, sizeof(line), "PSRAM used: %u bytes",
+           (unsigned)(psramBefore - psramAfter));
+  printLine(line);
+  snprintf(line, sizeof(line), "Heap used: %u bytes",
+           (unsigned)(heapBefore - heapAfter));
+  printLine(line);
 }
 
 static void cmdBye()
@@ -775,6 +887,11 @@ static void processInput(const char* line)
   if (matchKeyword(p, "COPY"))
   {
     cmdCopy(p);
+    return;
+  }
+  if (matchKeyword(p, "LOAD"))
+  {
+    cmdLoad(p);
     return;
   }
   if (matchKeyword(p, "PLAY"))
