@@ -1,0 +1,11 @@
+# char_editor.py — Python dependencies
+#
+# All imports are stdlib (json, tkinter), so there are no PyPI
+# packages to install. tkinter ships with the standard CPython
+# Windows / macOS installers; on Linux it's usually a separate
+# distro package (e.g. `apt install python3-tk` on Debian/Ubuntu,
+# `dnf install python3-tkinter` on Fedora).
+#
+# This file is intentionally empty — kept so users have a known
+# place to look. If a future utility adds third-party deps, add
+# them here.

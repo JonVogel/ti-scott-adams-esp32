@@ -1,0 +1,18 @@
+# Build artifacts
+build/
+*.bin
+*.elf
+*.map
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Game data — Scott Adams .DAT files and the original DOS interpreter
+# are not redistributed in this repo. Drop your own copy into advgames/
+# locally; it stays out of git.
+advgames/
+advgames.zip
+*.dat
