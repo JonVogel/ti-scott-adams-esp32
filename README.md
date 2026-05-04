@@ -9,10 +9,10 @@ the Marvel Questprobe series — anything in the standard Scott Adams
 > **⚠ Work in progress / scaffold.** This repo was just split off
 > from [`ti-extended-basic-esp32`](../ti-extended-basic-esp32) at
 > commit `8c100ce`. The hardware bringup, display, BLE keyboard, and
-> file I/O are inherited and known-good; the adventure interpreter
-> itself is not written yet. The first follow-up commits will strip
-> the BASIC-specific code and replace the main loop with the Scott
-> Adams interpreter.
+> file I/O are inherited and known-good. The BASIC interpreter has
+> been stripped; the current sketch boots into a small command shell
+> (`HELP`, `DIR`, `COPY`, `COPYALL`, `BYE`) for managing `.DAT`
+> files. The adventure interpreter itself has not been written yet.
 
 ## Why a separate repo?
 
