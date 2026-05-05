@@ -43,9 +43,7 @@ namespace scott
   static const int VERB_GET   = 10;  // commonly GET (also TAKE / PICK / *AX synonyms)
   static const int NOUN_ANY   = 0;   // matches anything in action verb-noun key
 
-  // Game flags that the format reserves a specific bit for.
-  // (Other flags 0..14 are game-defined.)
-  static const int FLAG_DARK = 15;   // "night" / "day" actions toggle this
+  // FLAG_DARK / FLAG_LIGHT_OUT live in scott_play.h.
 
   // -------------------------------------------------------------------
   // Per-turn execution result
@@ -64,22 +62,8 @@ namespace scott
   // Helpers — flag bits, item moves, inventory listing
   // -------------------------------------------------------------------
 
-  // Flags are 32 bits per spec — 0..31 are valid, with 15 (DARK) and
-  // 16 (LIGHT_OUT) reserved by the interpreter.
-  inline bool flagGet(const PlayState& ps, int bit)
-  {
-    if (bit < 0 || bit > 31) return false;
-    return (ps.flags & (1u << bit)) != 0;
-  }
-  inline void flagSet(PlayState& ps, int bit)
-  {
-    if (bit >= 0 && bit <= 31) ps.flags |= (1u << bit);
-  }
-  inline void flagClear(PlayState& ps, int bit)
-  {
-    if (bit >= 0 && bit <= 31) ps.flags &= ~(1u << bit);
-  }
-  static const int FLAG_LIGHT_OUT = 16;
+  // Flag accessors and FLAG_DARK / FLAG_LIGHT_OUT constants live in
+  // scott_play.h — they're state-querying, not opcode-specific.
 
   inline int countCarried(const Game& g)
   {
@@ -597,10 +581,12 @@ namespace scott
       if (printStr) { printStr("Give me a direction too."); printStr("\n"); }
       return;
     }
-    if (flagGet(ps, FLAG_DARK))
+    if (isDark(g, ps))
     {
-      // In the dark, you might fall and break your neck — but that's
-      // a game-action concern. Without one, just allow the move.
+      if (printStr) { printStr("Dangerous to move in the dark!"); printStr("\n"); }
+      // We allow the move to go through — many games rely on auto-actions
+      // to handle the "fell and broke my neck" consequence, and forcing
+      // it here would short-circuit those.
     }
     int dest = g.rooms[ps.curRoom].exits[nounIdx - 1];
     if (dest == 0)

@@ -81,6 +81,17 @@ static uint16_t bgColor = 0x07FF;
 static char screenBuf[ROWS][COLS];
 static char prevScreenBuf[ROWS][COLS];
 
+// Optional per-cell foreground color override. 0 means "use the
+// per-character-code charFgIdx default"; 1..16 force that palette
+// index for this cell. Lets renderRoom paint individual items in a
+// distinct color without disturbing the global character palette.
+static uint8_t cellFgOverride[ROWS][COLS];
+
+// Color used by upcoming printChar calls. 0 = default (transparent /
+// white). Set via setPrintColor() before printing a colored span,
+// reset to 0 after.
+static uint8_t currentPrintFg = 0;
+
 static const uint16_t tiPalette[17] =
 {
   0x0000,   // 0 unused
@@ -147,7 +158,9 @@ static void drawCell(int col, int row)
   int px = col * CHAR_W + DISPLAY_X_OFFSET;
   int py = row * CHAR_H + DISPLAY_Y_OFFSET;
 
-  uint16_t fg = resolveColor(charFgIdx[ch]);
+  uint8_t fgIdx = cellFgOverride[row][col];
+  if (fgIdx == 0) fgIdx = charFgIdx[ch];
+  uint16_t fg = resolveColor(fgIdx);
   uint16_t bg = resolveColor(charBgIdx[ch]);
 
   uint16_t pixBuf[CHAR_W * CHAR_H];
@@ -249,6 +262,8 @@ static void scrollUp()
 {
   memcpy(&screenBuf[0][0], &screenBuf[1][0], COLS * (ROWS - 1));
   memset(&screenBuf[ROWS - 1][0], 0x20, COLS);
+  memcpy(&cellFgOverride[0][0], &cellFgOverride[1][0], COLS * (ROWS - 1));
+  memset(&cellFgOverride[ROWS - 1][0], 0, COLS);
   refreshScreen();
   int y = (ROWS - 1) * CHAR_H + DISPLAY_Y_OFFSET;
   tft->fillRect(DISPLAY_X_OFFSET, y, COLS * CHAR_W, CHAR_H, bgColor);
@@ -275,6 +290,7 @@ static void printChar(char c)
   }
 
   screenBuf[cursorRow][cursorCol] = c;
+  cellFgOverride[cursorRow][cursorCol] = currentPrintFg;
   drawCell(cursorCol, cursorRow);
   prevScreenBuf[cursorRow][cursorCol] = c;
   cursorCol++;
@@ -293,9 +309,50 @@ static void printLine(const char* str)
   tft->flush();
 }
 
+// Word-aware print: emit characters, but at each space check whether
+// the next word would overflow the current line; if so, emit a newline
+// before printing it. Honors embedded '\n' bytes as hard breaks. Used
+// for game text (room descriptions, action messages) where the
+// 32-column screen would otherwise chop words mid-letter.
+static void printWrapped(const char* str)
+{
+  while (*str)
+  {
+    if (*str == '\n')
+    {
+      printChar('\n');
+      str++;
+      continue;
+    }
+    if (*str == ' ')
+    {
+      // Look ahead for the next word's length.
+      const char* p = str + 1;
+      while (*p == ' ') p++;
+      int wlen = 0;
+      while (p[wlen] && p[wlen] != ' ' && p[wlen] != '\n') wlen++;
+
+      if (wlen > 0 && wlen <= COLS &&
+          cursorCol + 1 + wlen > COLS)
+      {
+        // Skip the run of spaces, drop to a new line, print the word.
+        printChar('\n');
+        str = p;
+        continue;
+      }
+      printChar(' ');
+      str++;
+      continue;
+    }
+    printChar(*str++);
+  }
+  tft->flush();
+}
+
 static void clearScreen()
 {
   memset(screenBuf, ' ', COLS * ROWS);
+  memset(cellFgOverride, 0, sizeof(cellFgOverride));
   fillBackground(bgColor);
   cursorCol = 0;
   cursorRow = ROWS - 1;
@@ -890,6 +947,76 @@ static void cmdLoad(const char* name)
   printLine(line);
 }
 
+// Print a span of text with a temporary foreground color (1..16
+// palette index). Resets to default after.
+static void printColored(uint8_t fgIdx, const char* str)
+{
+  uint8_t saved = currentPrintFg;
+  currentPrintFg = fgIdx;
+  printWrapped(str);
+  currentPrintFg = saved;
+}
+
+// Color-coded room renderer that draws description, exits, and items
+// in distinct palette colors. Matches scott::renderRoom's structure
+// but takes advantage of the per-cell color override to highlight
+// each section. Treasures (item description starts with '*') get
+// light yellow; ordinary items get light green; exits get cyan.
+static void renderRoomColored(const scott::Game& g,
+                              const scott::PlayState& ps)
+{
+  if (scott::isDark(g, ps))
+  {
+    printColored(/*light red*/10, "I can't see. It is too dark!\n");
+    return;
+  }
+
+  const scott::Room& r = g.rooms[ps.curRoom];
+  if (r.description && r.description[0] == '*')
+  {
+    printWrapped(r.description + 1);
+  }
+  else if (r.description && r.description[0] != '\0')
+  {
+    printWrapped("I'm in a ");
+    printWrapped(r.description);
+  }
+  else
+  {
+    printWrapped("(no description)");
+  }
+  printWrapped("\n");
+
+  bool anyExit = false;
+  for (int i = 0; i < 6; i++)
+  {
+    if (r.exits[i] != 0)
+    {
+      printWrapped(anyExit ? ", " : "Obvious exits: ");
+      printColored(/*cyan*/8, scott::DIR_NAMES[i]);
+      anyExit = true;
+    }
+  }
+  if (!anyExit) printWrapped("No obvious exits");
+  printWrapped("\n");
+
+  bool anyItem = false;
+  for (int i = 0; i <= g.h.numItems; i++)
+  {
+    if (g.items[i].curLoc == ps.curRoom &&
+        g.items[i].description &&
+        g.items[i].description[0] != '\0')
+    {
+      printWrapped(anyItem ? ", " : "I can also see: ");
+      bool isTreasure = (g.items[i].description[0] == '*');
+      printColored(isTreasure ? /*light yellow*/12 : /*light green*/4,
+                   g.items[i].description);
+      anyItem = true;
+    }
+  }
+  if (anyItem) printWrapped("\n");
+}
+
 // Block here, polling BLE + serial, until the line editor reports a
 // completed line. Returns the trimmed input via the global inputBuf.
 static void waitForLine()
@@ -944,7 +1071,7 @@ static void cmdPlay(const char* name)
   scott::initPlay(g, ps);
 
   printLine("");
-  scott::renderRoom(g, ps, printString);
+  renderRoomColored(g, ps);
 
   scott::ExecResult res;
   while (!ps.gameOver && !res.quit)
@@ -957,25 +1084,20 @@ static void cmdPlay(const char* name)
 
     scott::Parsed p = scott::parseInput(g, inputBuf);
 
-    // Empty line — pass the turn (auto-actions still fire below).
-    bool emptyLine = (inputBuf[0] == '\0' ||
-                      (p.verbIdx == 0 && p.nounIdx == 0 &&
-                       inputBuf[0] != '\0'));
     if (p.verbIdx == 0 && p.nounIdx == 0 && inputBuf[0] != '\0')
     {
       printLine("I don't know that word.");
       continue;
     }
 
-    res = scott::execTurn(g, ps, p.verbIdx, p.nounIdx, printString);
-    scott::tickLight(g, ps, printString);
+    res = scott::execTurn(g, ps, p.verbIdx, p.nounIdx, printWrapped);
+    scott::tickLight(g, ps, printWrapped);
 
     if (res.redrawRoom)
     {
       printLine("");
-      scott::renderRoom(g, ps, printString);
+      renderRoomColored(g, ps);
     }
-    (void)emptyLine;
   }
 
   printLine("");

@@ -40,6 +40,38 @@ namespace scott
   static const uint8_t LOC_STORE   = 0;
   static const uint8_t LOC_CARRIED = 255;
 
+  // Reserved flags (spec §12.1).
+  static const int FLAG_DARK      = 15;
+  static const int FLAG_LIGHT_OUT = 16;
+
+  // Flag accessors. 32 bits per spec.
+  inline bool flagGet(const PlayState& ps, int bit)
+  {
+    if (bit < 0 || bit > 31) return false;
+    return (ps.flags & (1u << bit)) != 0;
+  }
+  inline void flagSet(PlayState& ps, int bit)
+  {
+    if (bit >= 0 && bit <= 31) ps.flags |= (1u << bit);
+  }
+  inline void flagClear(PlayState& ps, int bit)
+  {
+    if (bit >= 0 && bit <= 31) ps.flags &= ~(1u << bit);
+  }
+
+  // Spec §9.5 — dark when FLAG_DARK is set and there is no lit lamp
+  // reachable. The lamp is conventionally item #9; "lit and reachable"
+  // means LIGHT_OUT clear AND lamp in inventory or current room.
+  inline bool isDark(const Game& g, const PlayState& ps)
+  {
+    if (!flagGet(ps, FLAG_DARK)) return false;
+    if (flagGet(ps, FLAG_LIGHT_OUT)) return true;
+    if (g.h.numItems < 9) return true;
+    uint8_t lampLoc = g.items[9].curLoc;
+    if (lampLoc == LOC_CARRIED || lampLoc == ps.curRoom) return false;
+    return true;
+  }
+
   // Direction names in the order rooms store exits: N S E W U D.
   static const char* const DIR_NAMES[6] =
   {
@@ -215,6 +247,14 @@ namespace scott
                          PrintFn printStr)
   {
     if (!printStr) return;
+
+    // Dark room (spec §5.2 look opcode): show only the darkness
+    // message, no exits or items.
+    if (isDark(g, ps))
+    {
+      printStr("I can't see. It is too dark!\n");
+      return;
+    }
 
     const Room& r = g.rooms[ps.curRoom];
 
