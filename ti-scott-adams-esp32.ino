@@ -736,11 +736,10 @@ static void cmdHelp()
 static void cmdUnpair()
 {
   BleHidHost::unpairAll();
+  BleHidHost::requestPairingMode();
   printLine("All BLE peers forgotten.");
-  printLine("To re-pair, do ANY of:");
-  printLine("  - press BOOT button on board");
-  printLine("  - type PAIR via USB serial");
-  printLine("  - reboot (watchdog auto-pairs)");
+  printLine("Pairing mode open (30s).");
+  printLine("Press a key on your keyboard.");
 }
 
 static void cmdPair()
