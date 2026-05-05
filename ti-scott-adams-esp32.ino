@@ -217,6 +217,29 @@ static void resetCharColors()
   bgColor = tiPalette[8];
 }
 
+// Switch to the in-game terminal palette: white text on black screen.
+// Called after the TI boot splash so the splash stays cyan but the
+// shell / adventure text reads as a classic phosphor terminal.
+static void setTerminalColors()
+{
+  for (int i = 0; i < 256; i++)
+  {
+    charFgIdx[i] = 16;  // white
+    charBgIdx[i] = 1;   // transparent (→ screen color = black)
+  }
+  screenColorIdx = 2;   // black
+  fgColor = tiPalette[16];
+  bgColor = tiPalette[2];
+  fillBackground(bgColor);
+  for (int r = 0; r < ROWS; r++)
+  {
+    memset(screenBuf[r], ' ', COLS);
+    memset(prevScreenBuf[r], 0, COLS);
+  }
+  cursorCol = 0;
+  cursorRow = ROWS - 1;
+}
+
 // ---------------------------------------------------------------------------
 // Console primitives
 // ---------------------------------------------------------------------------
@@ -726,7 +749,8 @@ static void cmdHelp()
   printLine("  COPY NAME    SD -> FLASH");
   printLine("  COPYALL      copy every .DAT");
   printLine("  LOAD NAME    parse + show summary");
-  printLine("  PLAY NAME    (not yet impl.)");
+  printLine("  PLAY NAME    show starting room");
+  printLine("  PARSE N CMD  parser test");
   printLine("  PAIR         re-open BLE pairing");
   printLine("  UNPAIR       forget all BLE peers");
   printLine("  BYE          restart");
@@ -901,6 +925,61 @@ static void cmdPlay(const char* name)
   scott::renderRoom(g, ps, printString);
 }
 
+// PARSE NAME.DAT WORD [WORD] — load the given .DAT, parse the rest of
+// the line as a player command, and print the verb/noun the parser
+// matched. Diagnostic only; goes away once interactive PLAY exists.
+static void cmdParse(const char* args)
+{
+  if (!args || !*args)
+  {
+    printLine("Usage: PARSE name.dat WORD [WORD]");
+    return;
+  }
+
+  char name[32];
+  int n = 0;
+  while (*args && *args != ' ' && *args != '\t' && n < 31)
+  {
+    name[n++] = *args++;
+  }
+  name[n] = '\0';
+  while (*args == ' ' || *args == '\t') args++;
+
+  fs::FS* fs = nullptr;
+  char path[64];
+  if (!findDat(name, fs, path, sizeof(path)))
+  {
+    char msg[40];
+    snprintf(msg, sizeof(msg), "Not found: %s", name);
+    printLine(msg);
+    return;
+  }
+
+  scott::Game g;
+  char err[40] = {0};
+  if (!g.load(*fs, path, err, sizeof(err)))
+  {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Parse error: %s", err);
+    printLine(msg);
+    return;
+  }
+
+  scott::Parsed p = scott::parseInput(g, args);
+
+  char line[40];
+  snprintf(line, sizeof(line), "verb %d (%s)",
+           p.verbIdx,
+           (p.verbIdx > 0 && p.verbIdx <= g.h.numWords)
+             ? g.verbs[p.verbIdx].text : "-");
+  printLine(line);
+  snprintf(line, sizeof(line), "noun %d (%s)",
+           p.nounIdx,
+           (p.nounIdx > 0 && p.nounIdx <= g.h.numWords)
+             ? g.nouns[p.nounIdx].text : "-");
+  printLine(line);
+}
+
 static void cmdBye()
 {
   printLine("Restarting...");
@@ -963,6 +1042,11 @@ static void processInput(const char* line)
   if (matchKeyword(p, "PLAY"))
   {
     cmdPlay(p);
+    return;
+  }
+  if (matchKeyword(p, "PARSE"))
+  {
+    cmdParse(p);
     return;
   }
   if (matchKeyword(p, "UNPAIR"))
@@ -1032,6 +1116,8 @@ void setup()
 
   bleKbInit();
   showBootScreen();
+
+  setTerminalColors();
 
   cursorRow = ROWS - 1;
   cursorCol = 0;

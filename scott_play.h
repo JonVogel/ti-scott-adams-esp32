@@ -59,6 +59,103 @@ namespace scott
     // Item curLoc fields were populated to startLoc by the parser.
   }
 
+  // -------------------------------------------------------------------
+  // Two-word parser
+  // -------------------------------------------------------------------
+
+  struct Parsed
+  {
+    int verbIdx;   // 0 = no verb matched / no input
+    int nounIdx;   // 0 = no noun (or no second word)
+  };
+
+  // Match `text` against a verb or noun list. Comparison is
+  // case-insensitive over the first wordLen chars (per the .DAT
+  // header). Returns the canonical (non-synonym) index, or 0 for no
+  // match. Index 0 of each list is reserved (verb 0 = AUT, noun 0 =
+  // ANY) and is never returned as a player match.
+  inline int matchWord(const Word* words, int count, int wordLen,
+                       const char* text)
+  {
+    if (!text || text[0] == '\0' || !words) return 0;
+
+    for (int i = 1; i < count; i++)
+    {
+      const char* entry = words[i].text;
+      if (entry[0] == '*') entry++;   // strip synonym marker for compare
+      if (entry[0] == '\0') continue;
+
+      bool match = true;
+      for (int j = 0; j < wordLen; j++)
+      {
+        char a = (char)toupper((unsigned char)entry[j]);
+        char b = (char)toupper((unsigned char)text[j]);
+        if (a != b) { match = false; break; }
+        if (a == '\0') break;        // both ran out at the same length
+      }
+      if (match)
+      {
+        // Walk back through synonyms to the canonical entry.
+        int idx = i;
+        while (idx > 0 && words[idx].text[0] == '*') idx--;
+        return idx;
+      }
+    }
+    return 0;
+  }
+
+  // Parse a player command. Tokenizes the first two whitespace-separated
+  // words, uppercases them, looks each up in the verb/noun tables.
+  // Single-word shorthand for directions ("N", "NORTH") is rewritten to
+  // (GO, direction): per Scott Adams convention, verb 1 is GO and
+  // nouns 1..6 are N S E W U D in that order.
+  inline Parsed parseInput(const Game& g, const char* input)
+  {
+    Parsed p = {0, 0};
+    if (!input) return p;
+
+    char w1[16] = {0}, w2[16] = {0};
+    const char* s = input;
+
+    while (*s == ' ' || *s == '\t') s++;
+    int i = 0;
+    while (*s && *s != ' ' && *s != '\t' && i < 15)
+    {
+      w1[i++] = (char)toupper((unsigned char)*s++);
+    }
+    w1[i] = '\0';
+
+    while (*s == ' ' || *s == '\t') s++;
+    i = 0;
+    while (*s && *s != ' ' && *s != '\t' && i < 15)
+    {
+      w2[i++] = (char)toupper((unsigned char)*s++);
+    }
+    w2[i] = '\0';
+
+    if (w1[0] == '\0') return p;
+
+    p.verbIdx = matchWord(g.verbs, g.h.numWords + 1, g.h.wordLen, w1);
+    p.nounIdx = matchWord(g.nouns, g.h.numWords + 1, g.h.wordLen, w2);
+
+    // Single-word direction: "NORTH", "N", "U", etc. → (GO, direction).
+    if (p.verbIdx == 0 && w2[0] == '\0')
+    {
+      int dirIdx = matchWord(g.nouns, g.h.numWords + 1, g.h.wordLen, w1);
+      if (dirIdx >= 1 && dirIdx <= 6)
+      {
+        p.verbIdx = 1;        // GO
+        p.nounIdx = dirIdx;
+      }
+    }
+
+    return p;
+  }
+
+  // -------------------------------------------------------------------
+  // Room rendering
+  // -------------------------------------------------------------------
+
   // Render description, exits, and visible items for the player's
   // current room. Each section ends in '\n'. Output goes through
   // `printStr`, which is expected to handle '\n' as a hard line break.
