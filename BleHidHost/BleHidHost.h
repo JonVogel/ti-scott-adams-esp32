@@ -591,6 +591,25 @@ inline void BleHidHost::task()
     _pairingMode = false;
   }
 
+  // Close pairing mode early once any peer has finished pairing and
+  // become ready. Otherwise the 30s window stays open and an unrelated
+  // nearby BLE HID can squat on a free slot — observed in the wild
+  // with a stray "Q352020" device joining seconds after the legit
+  // keyboard paired, which then choked the BLE stack and starved
+  // reports from the real keyboard.
+  if (_pairingMode)
+  {
+    for (int i = 0; i < MAX_PEERS; i++)
+    {
+      if (_peers[i].connected && _peers[i].ready)
+      {
+        Serial.println("BleHidHost: pairing complete; closing window.");
+        _pairingMode = false;
+        break;
+      }
+    }
+  }
+
   // Only scan while in pairing mode. Previously we also scanned
   // continuously whenever any saved peer was missing — but a single
   // unreachable saved peer (e.g. a keyboard that's been turned off

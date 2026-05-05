@@ -450,36 +450,39 @@ static void editorTypeChar(uint8_t c)
   tft->flush();
 }
 
-// Poll once. When the user presses Enter, sets inputReady=true and the
-// completed line is in inputBuf (NUL-terminated, trailing NL not included).
+// Drain every available char (Serial + BLE) in one call. Stops early on
+// Enter so the dispatcher gets a chance to run before the next char.
 static void checkInput()
 {
-  int c = editorReadChar();
-  if (c < 0) return;
-
-  if (c == '\r')
+  int c;
+  while ((c = editorReadChar()) >= 0)
   {
-    inputBuf[inputPos] = '\0';
-    printChar('\n');
-    inputReady = true;
-    return;
-  }
+    Serial.printf("[in 0x%02x]\n", c);   // diagnostic: BLE/Serial char received
 
-  // BKSP / DEL — both treated as backspace
-  if (c == 127 || c == 8 || c == 7)
-  {
-    editorBackspace();
-    return;
-  }
+    if (c == '\r')
+    {
+      inputBuf[inputPos] = '\0';
+      printChar('\n');
+      inputReady = true;
+      return;
+    }
 
-  // Printable ASCII
-  if (c >= 32 && c < 127)
-  {
-    editorTypeChar((uint8_t)c);
-    return;
-  }
+    // BKSP only (HID 0x7F). Don't treat 7 (DEL) or 8 (LEFT) as backspace
+    // — they're TI cursor codes and we drop them silently for now.
+    if (c == 127)
+    {
+      editorBackspace();
+      continue;
+    }
 
-  // Anything else (cursor keys, function keys, control chars) — ignore
+    if (c >= 32 && c < 127)
+    {
+      editorTypeChar((uint8_t)c);
+      continue;
+    }
+
+    // Anything else (cursor keys, function keys, other control) — ignore
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -722,7 +725,22 @@ static void cmdHelp()
   printLine("  COPYALL      copy every .DAT");
   printLine("  LOAD NAME    parse + show summary");
   printLine("  PLAY NAME    (not yet impl.)");
+  printLine("  PAIR         re-open BLE pairing");
+  printLine("  UNPAIR       forget all BLE peers");
   printLine("  BYE          restart");
+}
+
+static void cmdUnpair()
+{
+  BleHidHost::unpairAll();
+  printLine("All BLE peers forgotten.");
+  printLine("Type PAIR (or press F12) to bond again.");
+}
+
+static void cmdPair()
+{
+  BleHidHost::requestPairingMode();
+  printLine("Pairing mode requested (30s).");
 }
 
 // Resolve a user-supplied .DAT name onto a (fs, path) pair.
@@ -897,6 +915,16 @@ static void processInput(const char* line)
   if (matchKeyword(p, "PLAY"))
   {
     printLine("PLAY: interpreter not yet implemented.");
+    return;
+  }
+  if (matchKeyword(p, "UNPAIR"))
+  {
+    cmdUnpair();
+    return;
+  }
+  if (matchKeyword(p, "PAIR"))
+  {
+    cmdPair();
     return;
   }
   if (matchKeyword(p, "BYE") || matchKeyword(p, "EXIT") ||
