@@ -570,6 +570,44 @@ static void checkInput()
 // ---------------------------------------------------------------------------
 // File operations: list .DAT files, copy SD -> FLASH
 // ---------------------------------------------------------------------------
+
+// Friendly title lookup for the standard Scott Adams Collection 2.2
+// .DAT files. Source: advgames/0readme.txt. Returns nullptr for
+// unknown filenames (probably user-supplied). Filename comparison is
+// case-insensitive and ignores any leading directory prefix.
+static const char* gameTitleFor(const char* filename)
+{
+  const char* base = strrchr(filename, '/');
+  base = base ? base + 1 : filename;
+
+  struct Entry { const char* file; const char* title; };
+  static const Entry table[] =
+  {
+    { "ADV01.DAT",    "Adventureland"            },
+    { "ADV02.DAT",    "Pirate Adventure"         },
+    { "ADV03.DAT",    "Secret Mission"           },
+    { "ADV04.DAT",    "Voodoo Castle"            },
+    { "ADV05.DAT",    "The Count"                },
+    { "ADV06.DAT",    "Strange Odyssey"          },
+    { "ADV07.DAT",    "Mystery Fun House"        },
+    { "ADV08.DAT",    "Pyramid of Doom"          },
+    { "ADV09.DAT",    "Ghost Town"               },
+    { "ADV10.DAT",    "Savage Island, Part I"    },
+    { "ADV11.DAT",    "Savage Island, Part II"   },
+    { "ADV12.DAT",    "The Golden Voyage"        },
+    { "ADV13.DAT",    "Sorcerer of Claymorgue"   },
+    { "ADV14A.DAT",   "Return to Pirate's Isle"  },
+    { "ADV14B.DAT",   "Buckaroo Banzai"          },
+    { "SAMPLER1.DAT", "Adventureland (sampler)"  },
+    { "QUEST1.DAT",   "The Hulk"                 },
+    { "QUEST2.DAT",   "Spider-Man"               },
+  };
+  for (const Entry& e : table)
+  {
+    if (strcasecmp(base, e.file) == 0) return e.title;
+  }
+  return nullptr;
+}
 static void listDatFilesIn(fs::FS& fs, const char* root, const char* label)
 {
   File dir = fs.open(root);
@@ -597,8 +635,17 @@ static void listDatFilesIn(fs::FS& fs, const char* root, const char* label)
        strcasecmp(name + nlen - 4, ".DAT") == 0);
     if (isDat && !f.isDirectory())
     {
+      const char* title = gameTitleFor(name);
       char line[40];
-      snprintf(line, sizeof(line), "  %-20s %6u", name, (unsigned)f.size());
+      if (title)
+      {
+        snprintf(line, sizeof(line), "  %-9s %s", name, title);
+      }
+      else
+      {
+        snprintf(line, sizeof(line), "  %-20s %6u",
+                 name, (unsigned)f.size());
+      }
       printLine(line);
       found++;
     }
