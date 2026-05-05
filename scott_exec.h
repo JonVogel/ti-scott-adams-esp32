@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Scott Adams action interpreter — condition opcodes, action opcodes,
  * action-table dispatch, and a small set of built-in fallbacks for the
@@ -19,7 +20,10 @@
  *     52..101    real opcodes (GET / DROP / GOTO / etc.)
  *     102..149   print message (N - 50)
  *
- * No GPL code from ScottFree or other interpreters has been copied.
+ * Original implementation, written from the openly-published Scott
+ * Adams .DAT format spec — not transcribed from any specific GPL
+ * interpreter. Released as part of this project under
+ * GPL-2.0-or-later.
  */
 
 #pragma once

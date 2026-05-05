@@ -104,8 +104,12 @@ build.bat all COM7       # everything, on a non-default port
 
 ## License
 
-MIT — see `LICENSE` if/when added.
+GPL-2.0-or-later — see `LICENSE` for the canonical GNU text. This
+matches the license of ScottFree and the broader Scott Adams
+interpreter ecosystem (garglk, etc.), so we can borrow freely from
+those references without compatibility friction.
 
-The Scott Adams `.DAT` interpreter is implemented from scratch
-against the published format spec; **no GPL code from ScottFree or
-other interpreters is included**.
+The interpreter (`scott_dat.h`, `scott_play.h`, `scott_exec.h`) was
+written from the openly-published `.DAT` format spec, not transcribed
+from any specific GPL implementation. It is original work, now
+released under GPL-2.0-or-later as part of this project.

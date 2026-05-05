@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Scott Adams .DAT file format types and parser.
  *
@@ -29,9 +30,10 @@
  *     previous verb, noun-with-* to previous noun). The parser keeps
  *     the '*' prefix so the executor can resolve at lookup time.
  *
- * No GPL code from ScottFree or other interpreters has been copied.
- * The format details encoded here are taken from the openly-published
- * Scott Adams .DAT format spec and verified against actual .DAT bytes.
+ * Implementation is original work, written from the openly-published
+ * .DAT format spec and verified against actual .DAT bytes — not
+ * transcribed from any specific GPL interpreter (ScottFree, garglk,
+ * etc.). Released as part of this project under GPL-2.0-or-later.
  */
 
 #pragma once
