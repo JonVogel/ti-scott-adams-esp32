@@ -137,12 +137,38 @@ inline const char* BleHidHost::_nvsNamespace = "blehidhost";
 // ---------------------------------------------------------------------------
 inline int BleHidHost::_findFreeSlot()
 {
-  // A slot is "free" when not connected AND not holding a saved peer.
+  // First-pass: a slot is genuinely free (no connection, no saved
+  // peer).
   for (int i = 0; i < MAX_PEERS; i++)
   {
     if (!_peers[i].connected && _peers[i].savedAddress.length() == 0)
     {
       return i;
+    }
+  }
+  // Second-pass (only meaningful in pairing mode): every slot has a
+  // saved address but is not connected. The user explicitly asked to
+  // pair a NEW device, so evict the first non-connected slot —
+  // forgetting one stale bond to make room. Without this, two stale
+  // bonds permanently lock out fresh pairing.
+  if (_pairingMode)
+  {
+    for (int i = 0; i < MAX_PEERS; i++)
+    {
+      if (!_peers[i].connected)
+      {
+        Serial.printf("BleHidHost: evicting stale bond on slot %d (%s) "
+                      "to make room\n",
+                      i, _peers[i].savedAddress.c_str());
+        _peers[i].savedAddress = "";
+        _peers[i].ready = false;
+        _prefs.begin(_nvsNamespace, false);
+        char key[16];
+        snprintf(key, sizeof(key), "peer_addr_%d", i);
+        _prefs.remove(key);
+        _prefs.end();
+        return i;
+      }
     }
   }
   return -1;
@@ -565,16 +591,14 @@ inline void BleHidHost::task()
     _pairingMode = false;
   }
 
-  // Scan whenever any saved peer is missing OR pairing mode is open.
-  bool anyMissing = false;
-  for (int i = 0; i < MAX_PEERS; i++)
-  {
-    if (!_peers[i].connected && _peers[i].savedAddress.length() > 0)
-    {
-      anyMissing = true; break;
-    }
-  }
-  if ((anyMissing || _pairingMode) && _doScan)
+  // Only scan while in pairing mode. Previously we also scanned
+  // continuously whenever any saved peer was missing — but a single
+  // unreachable saved peer (e.g. a keyboard that's been turned off
+  // for good) leaves the radio in perpetual active-scan mode, which
+  // bogs down the whole sketch. The watchdog in ble_keyboard.h
+  // detects "no peer connected for 5 s" and asks for pairing mode,
+  // so transient disconnects still auto-recover.
+  if (_pairingMode && _doScan)
   {
     _doScan = false;
     BLEScan* pScan = BLEDevice::getScan();
