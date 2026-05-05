@@ -31,6 +31,7 @@
 #include "file_io.h"
 #include "scott_dat.h"
 #include "scott_play.h"
+#include "scott_exec.h"
 
 // ---------------------------------------------------------------------------
 // ESP32-8048S043C (Sunton 4.3" 800x480 RGB) pin map + display geometry
@@ -888,8 +889,28 @@ static void cmdLoad(const char* name)
   printLine(line);
 }
 
-// PLAY: load a .DAT, initialize play state, render the starting room.
-// Phase B — no parser yet, so this just prints the room and exits.
+// Block here, polling BLE + serial, until the line editor reports a
+// completed line. Returns the trimmed input via the global inputBuf.
+static void waitForLine()
+{
+  while (!inputReady)
+  {
+    bleKbTask();
+    checkInput();
+    static uint32_t lastFlush = 0;
+    uint32_t now = millis();
+    if (now - lastFlush >= 16)
+    {
+      tft->flush();
+      lastFlush = now;
+    }
+    yield();
+  }
+}
+
+// PLAY: load a .DAT, initialize play state, render the starting room,
+// and enter the per-turn input loop. Returns to the shell on QUIT,
+// game-over, or a parse error.
 static void cmdPlay(const char* name)
 {
   if (!name || !*name)
@@ -923,6 +944,42 @@ static void cmdPlay(const char* name)
 
   printLine("");
   scott::renderRoom(g, ps, printString);
+
+  scott::ExecResult res;
+  while (!ps.gameOver && !res.quit)
+  {
+    printLine("");
+    printString("Tell me what to do? ");
+    editorBeginLine();
+    waitForLine();
+    inputReady = false;
+
+    scott::Parsed p = scott::parseInput(g, inputBuf);
+
+    // Empty line — pass the turn (auto-actions still fire below).
+    bool emptyLine = (inputBuf[0] == '\0' ||
+                      (p.verbIdx == 0 && p.nounIdx == 0 &&
+                       inputBuf[0] != '\0'));
+    if (p.verbIdx == 0 && p.nounIdx == 0 && inputBuf[0] != '\0')
+    {
+      printLine("I don't know that word.");
+      continue;
+    }
+
+    res = scott::execTurn(g, ps, p.verbIdx, p.nounIdx, printString);
+    scott::tickLight(g, ps, printString);
+
+    if (res.redrawRoom)
+    {
+      printLine("");
+      scott::renderRoom(g, ps, printString);
+    }
+    (void)emptyLine;
+  }
+
+  printLine("");
+  if (res.quit) printLine("(left game)");
+  else if (ps.gameOver) printLine("(game over)");
 }
 
 // PARSE NAME.DAT WORD [WORD] — load the given .DAT, parse the rest of

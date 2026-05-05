@@ -90,8 +90,11 @@ namespace scott
       {
         char a = (char)toupper((unsigned char)entry[j]);
         char b = (char)toupper((unsigned char)text[j]);
+        // If either side runs out, everything we've compared so far
+        // matched — treat as a successful prefix match. Lets the
+        // player type "N" or "NO" for NORTH, "GE" for GET, etc.
+        if (a == '\0' || b == '\0') break;
         if (a != b) { match = false; break; }
-        if (a == '\0') break;        // both ran out at the same length
       }
       if (match)
       {
