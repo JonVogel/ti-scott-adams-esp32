@@ -493,10 +493,9 @@ static void listDatFilesIn(fs::FS& fs, const char* root, const char* label)
   File dir = fs.open(root);
   if (!dir || !dir.isDirectory())
   {
-    char msg[40];
-    snprintf(msg, sizeof(msg), "%s: no %s", label, root);
-    printLine(msg);
     if (dir) dir.close();
+    // Silent miss — `/scottadams` not yet created is normal on fresh
+    // devices, and the rest of the listing covers the legacy root case.
     return;
   }
 
@@ -531,6 +530,7 @@ static void listDatFilesIn(fs::FS& fs, const char* root, const char* label)
 
 static void cmdDir()
 {
+  listDatFilesIn(LittleFS, "/scottadams", "FLASH");
   listDatFilesIn(LittleFS, "/", "FLASH");
   if (fio::g_sdOk)
   {
@@ -602,12 +602,15 @@ static bool findOnSd(const char* name, char* outPath, int outSize)
   return SD.exists(outPath);
 }
 
-// /scottadams/ADV01.DAT -> /ADV01.DAT for the FLASH side
+// /scottadams/ADV01.DAT (anywhere) -> /scottadams/ADV01.DAT on FLASH.
+// FLASH writes always land in /scottadams/ so we don't drop .DAT files
+// at root, where the BASIC sketch's CAT would list them and a future
+// wholesale-cleanup operation might touch them.
 static void flashPathFor(const char* sdPath, char* outPath, int outSize)
 {
   const char* base = strrchr(sdPath, '/');
   base = base ? base + 1 : sdPath;
-  snprintf(outPath, outSize, "/%s", base);
+  snprintf(outPath, outSize, "/scottadams/%s", base);
 }
 
 static void cmdCopy(const char* name)
@@ -734,7 +737,10 @@ static void cmdUnpair()
 {
   BleHidHost::unpairAll();
   printLine("All BLE peers forgotten.");
-  printLine("Type PAIR (or press F12) to bond again.");
+  printLine("To re-pair, do ANY of:");
+  printLine("  - press BOOT button on board");
+  printLine("  - type PAIR via USB serial");
+  printLine("  - reboot (watchdog auto-pairs)");
 }
 
 static void cmdPair()
@@ -744,13 +750,20 @@ static void cmdPair()
 }
 
 // Resolve a user-supplied .DAT name onto a (fs, path) pair.
-// Looks in FLASH first (root), then SD /scottadams/, then SD /.
+// Looks in FLASH /scottadams/, then FLASH / (intentional cross-access
+// from BASIC-style root files), then SD /scottadams/, then SD /.
 static bool findDat(const char* name, fs::FS*& outFs,
                     char* outPath, int outSize)
 {
   char buf[64];
 
-  // FLASH: /NAME
+  snprintf(buf, sizeof(buf), "/scottadams/%s", name);
+  if (LittleFS.exists(buf))
+  {
+    outFs = &LittleFS;
+    snprintf(outPath, outSize, "%s", buf);
+    return true;
+  }
   snprintf(buf, sizeof(buf), "/%s", name);
   if (LittleFS.exists(buf))
   {
@@ -953,6 +966,12 @@ void setup()
   else
   {
     Serial.println("LittleFS mounted.");
+    // Ensure our private subdir exists so /scottadams/* writes succeed.
+    // mkdir is a no-op if the dir already exists.
+    if (!LittleFS.exists("/scottadams"))
+    {
+      LittleFS.mkdir("/scottadams");
+    }
   }
 
   if (fio::beginSD(/*cs=*/10, /*sck=*/12, /*miso=*/13, /*mosi=*/11))
