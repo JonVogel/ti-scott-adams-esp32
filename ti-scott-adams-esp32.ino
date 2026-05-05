@@ -33,6 +33,7 @@
 #include "scott_dat.h"
 #include "scott_play.h"
 #include "scott_exec.h"
+#include "scott_save.h"
 
 // ---------------------------------------------------------------------------
 // ESP32-8048S043C (Sunton 4.3" 800x480 RGB) pin map + display geometry
@@ -1050,6 +1051,24 @@ static void waitForLine()
   }
 }
 
+// Derive a save path from a game's .DAT filename. Strips any leading
+// directory and the extension, then prepends /scottadams/saves/ and
+// appends .SAV. ADV01.DAT → /scottadams/saves/ADV01.SAV.
+static void deriveSavePath(const char* gameName, char* outPath, size_t outSize)
+{
+  const char* base = strrchr(gameName, '/');
+  base = base ? base + 1 : gameName;
+  char stem[32];
+  size_t i = 0;
+  while (base[i] && base[i] != '.' && i < sizeof(stem) - 1)
+  {
+    stem[i] = base[i];
+    i++;
+  }
+  stem[i] = '\0';
+  snprintf(outPath, outSize, "/scottadams/saves/%s.SAV", stem);
+}
+
 // PLAY: load a .DAT, initialize play state, render the starting room,
 // and enter the per-turn input loop. Returns to the shell on QUIT,
 // game-over, or a parse error.
@@ -1084,6 +1103,9 @@ static void cmdPlay(const char* name)
   scott::PlayState ps;
   scott::initPlay(g, ps);
 
+  char savePath[80];
+  deriveSavePath(name, savePath, sizeof(savePath));
+
   printLine("");
   renderRoomColored(g, ps);
 
@@ -1096,6 +1118,34 @@ static void cmdPlay(const char* name)
     waitForLine();
     inputReady = false;
 
+    // Interpreter shortcuts — don't go through the parser. Recognise
+    // a few stems case-insensitively so SAVE / SAVEGAME / Restore /
+    // restore-game etc. all work.
+    const char* in = inputBuf;
+    while (*in == ' ' || *in == '\t') in++;
+
+    if (strncasecmp(in, "SAVE", 4) == 0)
+    {
+      bool ok = scott::saveGame(g, ps, LittleFS, savePath);
+      printLine(ok ? "Saved." : "Save failed.");
+      continue;
+    }
+    if (strncasecmp(in, "REST", 4) == 0)
+    {
+      bool ok = scott::restoreGame(g, ps, LittleFS, savePath);
+      if (ok)
+      {
+        printLine("Restored.");
+        printLine("");
+        renderRoomColored(g, ps);
+      }
+      else
+      {
+        printLine("Load failed.");
+      }
+      continue;
+    }
+
     scott::Parsed p = scott::parseInput(g, inputBuf);
 
     if (p.verbIdx == 0 && p.nounIdx == 0 && inputBuf[0] != '\0')
@@ -1106,6 +1156,16 @@ static void cmdPlay(const char* name)
 
     res = scott::execTurn(g, ps, p.verbIdx, p.nounIdx, printWrapped);
     scott::tickLight(g, ps, printWrapped);
+
+    // Game-triggered save (opcode 71). Game scripts typically use
+    // this after a "save game" verb that pre-prints something like
+    // "Saving..." — we just write the file and report.
+    if (res.requestSave)
+    {
+      bool ok = scott::saveGame(g, ps, LittleFS, savePath);
+      printLine(ok ? "Saved." : "Save failed.");
+      res.requestSave = false;
+    }
 
     if (res.redrawRoom)
     {
@@ -1284,6 +1344,10 @@ void setup()
     if (!LittleFS.exists("/scottadams"))
     {
       LittleFS.mkdir("/scottadams");
+    }
+    if (!LittleFS.exists("/scottadams/saves"))
+    {
+      LittleFS.mkdir("/scottadams/saves");
     }
   }
 

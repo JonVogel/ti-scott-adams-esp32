@@ -56,6 +56,7 @@ namespace scott
     bool gameOver      = false;  // game forced finish (action 63) or death
     bool quit          = false;  // user-requested QUIT
     bool continueChain = false;  // opcode 73 — keep walking the action table
+    bool requestSave   = false;  // opcode 71 — caller should snapshot state
   };
 
   // -------------------------------------------------------------------
@@ -376,8 +377,8 @@ namespace scott
         if (printStr) printStr("\n\n");
         res.redrawRoom = true;
         break;
-      case 71:  // SaveGame — not implemented yet
-        if (printStr) { printStr("Save not yet implemented."); printStr("\n"); }
+      case 71:  // save_game — caller writes the snapshot to disk
+        res.requestSave = true;
         break;
       case 72:  // x<->y — swap two items' locations
       {
