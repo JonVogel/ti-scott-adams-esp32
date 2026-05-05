@@ -30,6 +30,7 @@
 #include "ble_keyboard.h"
 #include "file_io.h"
 #include "scott_dat.h"
+#include "scott_play.h"
 
 // ---------------------------------------------------------------------------
 // ESP32-8048S043C (Sunton 4.3" 800x480 RGB) pin map + display geometry
@@ -457,8 +458,6 @@ static void checkInput()
   int c;
   while ((c = editorReadChar()) >= 0)
   {
-    Serial.printf("[in 0x%02x]\n", c);   // diagnostic: BLE/Serial char received
-
     if (c == '\r')
     {
       inputBuf[inputPos] = '\0';
@@ -865,6 +864,43 @@ static void cmdLoad(const char* name)
   printLine(line);
 }
 
+// PLAY: load a .DAT, initialize play state, render the starting room.
+// Phase B — no parser yet, so this just prints the room and exits.
+static void cmdPlay(const char* name)
+{
+  if (!name || !*name)
+  {
+    printLine("Usage: PLAY name.dat");
+    return;
+  }
+
+  fs::FS* fs = nullptr;
+  char path[64];
+  if (!findDat(name, fs, path, sizeof(path)))
+  {
+    char msg[40];
+    snprintf(msg, sizeof(msg), "Not found: %s", name);
+    printLine(msg);
+    return;
+  }
+
+  scott::Game g;
+  char err[40] = {0};
+  if (!g.load(*fs, path, err, sizeof(err)))
+  {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Parse error: %s", err);
+    printLine(msg);
+    return;
+  }
+
+  scott::PlayState ps;
+  scott::initPlay(g, ps);
+
+  printLine("");
+  scott::renderRoom(g, ps, printString);
+}
+
 static void cmdBye()
 {
   printLine("Restarting...");
@@ -926,7 +962,7 @@ static void processInput(const char* line)
   }
   if (matchKeyword(p, "PLAY"))
   {
-    printLine("PLAY: interpreter not yet implemented.");
+    cmdPlay(p);
     return;
   }
   if (matchKeyword(p, "UNPAIR"))
