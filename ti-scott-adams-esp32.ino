@@ -315,10 +315,26 @@ static void printLine(const char* str)
 // before printing it. Honors embedded '\n' bytes as hard breaks. Used
 // for game text (room descriptions, action messages) where the
 // 32-column screen would otherwise chop words mid-letter.
+//
+// Also intercepts two color sentinels emitted by the Scott Adams
+// executor: 0x01 begins a game-message colored span (light yellow);
+// 0x02 ends it. The bytes themselves are not displayed.
 static void printWrapped(const char* str)
 {
   while (*str)
   {
+    if (*str == '\x01')
+    {
+      currentPrintFg = 12;   // light yellow — .DAT message text
+      str++;
+      continue;
+    }
+    if (*str == '\x02')
+    {
+      currentPrintFg = 0;    // back to default
+      str++;
+      continue;
+    }
     if (*str == '\n')
     {
       printChar('\n');

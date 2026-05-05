@@ -123,10 +123,13 @@ namespace scott
     printStr("\n");
   }
 
-  inline void printScore(const Game& g, const PlayState& ps,
+  // Print the player's score. Returns true if the player has won —
+  // i.e. has stored at least h.numTreasures treasures in the treasure
+  // room. Caller should propagate that into ExecResult.gameOver.
+  inline bool printScore(const Game& g, const PlayState& ps,
                          PrintFn printStr)
   {
-    if (!printStr) return;
+    if (!printStr) return false;
     int found = 0;
     for (int i = 0; i <= g.h.numItems; i++)
     {
@@ -146,7 +149,15 @@ namespace scott
     snprintf(buf, sizeof(buf), "On a scale of 0 to 100 that's %d.", pct);
     printStr(buf);
     printStr("\n");
+
+    // Per spec §5.2 (score) — when stored treasures >= total, game ends.
+    if (found >= total)
+    {
+      printStr("Well done.\n");
+      return true;
+    }
     (void)ps;
+    return false;
   }
 
   // -------------------------------------------------------------------
@@ -252,19 +263,21 @@ namespace scott
   {
     if (sub == 0) return;
 
-    // 1..51: print message N
+    // 1..51 and 102..149 print one of the .DAT messages. Wrap the
+    // payload in 0x01/0x02 sentinels so the display layer can paint
+    // game messages in their own color. The bytes themselves are
+    // intercepted (not displayed) by printWrapped on the .ino side.
     if (sub >= 1 && sub <= 51)
     {
       const char* m = (sub <= g.h.numMessages) ? g.messages[sub] : nullptr;
-      if (m && printStr) { printStr(m); printStr("\n"); }
+      if (m && printStr) { printStr("\x01"); printStr(m); printStr("\x02\n"); }
       return;
     }
-    // 102..149: print message (N - 50)
     if (sub >= 102 && sub <= 149)
     {
       int idx = sub - 50;
       const char* m = (idx <= g.h.numMessages) ? g.messages[idx] : nullptr;
-      if (m && printStr) { printStr(m); printStr("\n"); }
+      if (m && printStr) { printStr("\x01"); printStr(m); printStr("\x02\n"); }
       return;
     }
 
@@ -353,8 +366,12 @@ namespace scott
       case 76:
         res.redrawRoom = true;
         break;
-      case 65:  // SCORE
-        printScore(g, ps, printStr);
+      case 65:  // score — also ends the game on win
+        if (printScore(g, ps, printStr))
+        {
+          ps.gameOver  = true;
+          res.gameOver = true;
+        }
         break;
       case 66:  // INV
         printInventory(g, printStr);
@@ -584,10 +601,19 @@ namespace scott
     }
     if (isDark(g, ps))
     {
-      if (printStr) { printStr("Dangerous to move in the dark!"); printStr("\n"); }
-      // We allow the move to go through — many games rely on auto-actions
-      // to handle the "fell and broke my neck" consequence, and forcing
-      // it here would short-circuit those.
+      // Random jeopardy per spec §8.5: 1-in-5 chance of breaking your
+      // neck. Otherwise just warn. Game auto-actions can also handle
+      // this on top, but most games leave it to the interpreter.
+      if (random(5) == 0)
+      {
+        if (printStr) { printStr("I fell down and broke my neck.\n"); }
+        flagClear(ps, FLAG_DARK);
+        ps.curRoom = (uint8_t)g.h.numRooms;     // limbo
+        res.redrawRoom = true;
+        res.acted = true;
+        return;
+      }
+      if (printStr) { printStr("Dangerous to move in the dark!\n"); }
     }
     int dest = g.rooms[ps.curRoom].exits[nounIdx - 1];
     if (dest == 0)
@@ -713,7 +739,11 @@ namespace scott
     }
     if (eq("SCO"))
     {
-      printScore(g, ps, printStr);
+      if (printScore(g, ps, printStr))
+      {
+        ps.gameOver  = true;
+        res.gameOver = true;
+      }
       res.acted = true;
       return res;
     }
