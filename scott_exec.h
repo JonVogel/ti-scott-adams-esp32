@@ -53,29 +53,33 @@ namespace scott
 
   struct ExecResult
   {
-    bool acted        = false;  // some action ran (not silent fall-through)
-    bool redrawRoom   = false;  // current room changed — caller should re-render
-    bool gameOver     = false;  // game forced finish (action 63) or death
-    bool quit         = false;  // user-requested QUIT
+    bool acted         = false;  // some action ran (not silent fall-through)
+    bool redrawRoom    = false;  // current room changed — caller should re-render
+    bool gameOver      = false;  // game forced finish (action 63) or death
+    bool quit          = false;  // user-requested QUIT
+    bool continueChain = false;  // opcode 73 — keep walking the action table
   };
 
   // -------------------------------------------------------------------
   // Helpers — flag bits, item moves, inventory listing
   // -------------------------------------------------------------------
 
+  // Flags are 32 bits per spec — 0..31 are valid, with 15 (DARK) and
+  // 16 (LIGHT_OUT) reserved by the interpreter.
   inline bool flagGet(const PlayState& ps, int bit)
   {
-    if (bit < 0 || bit > 15) return false;
+    if (bit < 0 || bit > 31) return false;
     return (ps.flags & (1u << bit)) != 0;
   }
   inline void flagSet(PlayState& ps, int bit)
   {
-    if (bit >= 0 && bit <= 15) ps.flags |= (1u << bit);
+    if (bit >= 0 && bit <= 31) ps.flags |= (1u << bit);
   }
   inline void flagClear(PlayState& ps, int bit)
   {
-    if (bit >= 0 && bit <= 15) ps.flags &= ~(1u << bit);
+    if (bit >= 0 && bit <= 31) ps.flags &= ~(1u << bit);
   }
+  static const int FLAG_LIGHT_OUT = 16;
 
   inline int countCarried(const Game& g)
   {
@@ -228,10 +232,10 @@ namespace scott
         case 14:  // RM0 — item arg is in store room (not yet placed)
           if (g.items[arg].curLoc != LOC_STORE) return false;
           break;
-        case 15:  // CT< — counter < arg
-          if (!(ps.counter < arg)) return false;
+        case 15:  // counter_le — counter <= arg (spec §4.2)
+          if (!(ps.counter <= arg)) return false;
           break;
-        case 16:  // CT> — counter > arg (strictly greater)
+        case 16:  // counter_gt — counter > arg (strictly greater)
           if (!(ps.counter > arg)) return false;
           break;
         case 17:  // ORG — item arg is at its original starting location
@@ -376,10 +380,13 @@ namespace scott
       case 68:  // clear flag 0
         flagClear(ps, 0);
         break;
-      case 69:  // refill lamp + flag 0 set
+      case 69:  // refill_lamp — reset lamp time, clear LIGHT_OUT (flag 16)
         ps.lightLeft = g.h.lightTime;
-        flagClear(ps, 16);   // some games use bit 16, ignored if out of range
-        flagSet(ps, 0);
+        flagClear(ps, FLAG_LIGHT_OUT);
+        // Spec also says: "moves the lamp item to the player's
+        // inventory" — most games drive that with an explicit put
+        // sub-action paired with the refill, so we don't try to
+        // identify "the lamp item" here.
         break;
       case 70:  // clear screen — we just emit a few newlines
         if (printStr) printStr("\n\n");
@@ -402,7 +409,8 @@ namespace scott
         }
         break;
       }
-      case 73:  // continue — process next action; we just no-op here
+      case 73:  // continue — keep walking the action table for more matches
+        res.continueChain = true;
         break;
       case 74:  // get without slot check (force take)
       {
@@ -422,53 +430,72 @@ namespace scott
         }
         break;
       }
-      case 77:  // counter -= 1
-        if (ps.counter > 0) ps.counter--;
+      case 77:  // dec_counter — counter -= 1 if >= 0
+        if (ps.counter >= 0) ps.counter--;
         break;
-      case 78:  // counter += 1
-        if (ps.counter < 255) ps.counter++;
-        break;
-      case 79:  // print counter
+      case 78:  // print_counter — display counter value
       {
         char buf[16];
-        snprintf(buf, sizeof(buf), "%d", ps.counter);
+        snprintf(buf, sizeof(buf), "%d", (int)ps.counter);
         if (printStr) printStr(buf);
         break;
       }
-      case 80:  // counter <- arg
-        ps.counter = (uint8_t)popParam();
+      case 79:  // set_counter — counter <- arg
+        ps.counter = (int16_t)popParam();
         break;
-      case 81:  // ROOM<->saved — swap current room with savedRoom
-      {
+      case 80:  // swap_room — swap player location with main savedRoom
+      {                                            // (no parameter)
         uint8_t tmp = ps.curRoom;
         ps.curRoom = ps.savedRoom;
         ps.savedRoom = tmp;
         res.redrawRoom = true;
         break;
       }
-      case 82:  // counter += arg
-        ps.counter = (uint8_t)(ps.counter + popParam());
-        break;
-      case 83:  // counter -= arg
+      case 81:  // swap_counter — swap counter with savedCounters[arg]
       {
-        int sub2 = popParam();
-        ps.counter = (uint8_t)(ps.counter - sub2);
+        int slot = popParam();
+        if (slot >= 0 && slot < 16)
+        {
+          int16_t tmp = ps.counter;
+          ps.counter = ps.savedCounters[slot];
+          ps.savedCounters[slot] = tmp;
+        }
         break;
       }
-      case 84:  // print noun (we don't keep the typed noun string yet)
-        break;
-      case 85:  // print noun + newline
-        if (printStr) printStr("\n");
-        break;
-      case 86:  // print newline
-        if (printStr) printStr("\n");
-        break;
-      case 87:  // swap savedRoom slot (single slot model — same as 81)
+      case 82:  // add_to_counter — counter += arg, clamp to [-1, 32767]
       {
-        uint8_t tmp = ps.curRoom;
-        ps.curRoom = ps.savedRoom;
-        ps.savedRoom = tmp;
-        res.redrawRoom = true;
+        long v = (long)ps.counter + popParam();
+        if (v < -1)     v = -1;
+        if (v > 32767)  v = 32767;
+        ps.counter = (int16_t)v;
+        break;
+      }
+      case 83:  // subtract_from_counter — counter -= arg, clamp [-1, 32767]
+      {
+        long v = (long)ps.counter - popParam();
+        if (v < -1)     v = -1;
+        if (v > 32767)  v = 32767;
+        ps.counter = (int16_t)v;
+        break;
+      }
+      case 84:  // print_noun (we don't track the typed noun string yet)
+        break;
+      case 85:  // println_noun
+        if (printStr) printStr("\n");
+        break;
+      case 86:  // println — newline
+        if (printStr) printStr("\n");
+        break;
+      case 87:  // swap_specific_room — swap player loc with savedRooms[arg]
+      {
+        int slot = popParam();
+        if (slot >= 0 && slot < 16)
+        {
+          uint8_t tmp = ps.curRoom;
+          ps.curRoom = ps.savedRooms[slot];
+          ps.savedRooms[slot] = tmp;
+          res.redrawRoom = true;
+        }
         break;
       }
       case 88:  // pause — wait n seconds (we keep it brief)
@@ -506,8 +533,10 @@ namespace scott
   // -------------------------------------------------------------------
 
   // Try to run any matching player action. Walks the actions table in
-  // order; the first action whose verb-noun key matches AND whose
-  // conditions all pass wins. Returns true if an action ran.
+  // order; the first matching action whose conditions pass runs. By
+  // default that's the only action that fires — but if its sub-actions
+  // include opcode 73 ("continue"), we keep walking and run additional
+  // matching actions. Returns true if at least one action ran.
   inline bool tryPlayerAction(Game& g, PlayState& ps,
                               int verbIdx, int nounIdx,
                               ExecResult& res, PrintFn printStr)
@@ -515,6 +544,7 @@ namespace scott
     if (verbIdx <= 0) return false;
     int wantKey = verbIdx * 150 + nounIdx;
     int wantAny = verbIdx * 150;   // matches verb with NOUN_ANY (0)
+    bool ranAny = false;
     for (int i = 0; i <= g.h.numActions; i++)
     {
       const Action& act = g.actions[i];
@@ -525,11 +555,14 @@ namespace scott
       int paramCount = 0;
       if (!evalConditions(g, ps, act, params, paramCount)) continue;
       int pIdx = 0;
+      res.continueChain = false;
       execActionPair(g, ps, act, params, pIdx, res, printStr);
       res.acted = true;
-      return true;
+      ranAny = true;
+      if (res.gameOver || res.quit) return true;
+      if (!res.continueChain) return true;
     }
-    return false;
+    return ranAny;
   }
 
   // Run all auto-actions (verb 0). They fire whenever their conditions
@@ -561,7 +594,7 @@ namespace scott
   {
     if (nounIdx < 1 || nounIdx > 6)
     {
-      if (printStr) { printStr("Go where?"); printStr("\n"); }
+      if (printStr) { printStr("Give me a direction too."); printStr("\n"); }
       return;
     }
     if (flagGet(ps, FLAG_DARK))
@@ -711,18 +744,23 @@ namespace scott
   // Light-source bookkeeping (called once per turn after execTurn)
   // -------------------------------------------------------------------
 
-  // Decrement light timer if the lamp is lit (flag 0). When it
-  // expires, print a warning and clear the lit flag — a subsequent
-  // auto-action in dark games handles the "blackout" behavior.
+  // Lamp bookkeeping per spec §9.5: when the lamp item (item #9) is
+  // in the game (any room except the store) the timer counts down.
+  // When it hits zero, set flag 16 (LIGHT_OUT). Header lampTime can be
+  // -1 to inhibit the timer entirely (later games like Gremlins).
   inline void tickLight(Game& g, PlayState& ps, PrintFn printStr)
   {
-    if (!flagGet(ps, 0)) return;
+    if ((int16_t)g.h.lightTime == -1) return;        // disabled
+    if (flagGet(ps, FLAG_LIGHT_OUT)) return;          // already out
+    if (g.h.numItems < 9) return;                     // no lamp slot
+    if (g.items[9].curLoc == LOC_STORE) return;       // lamp is off-stage
     if (ps.lightLeft == 0) return;
+
     ps.lightLeft--;
     if (ps.lightLeft == 0)
     {
-      flagClear(ps, 0);
-      if (printStr) { printStr("Light has run out."); printStr("\n"); }
+      flagSet(ps, FLAG_LIGHT_OUT);
+      if (printStr) { printStr("Light has run out!"); printStr("\n"); }
     }
     else if (ps.lightLeft < 25 && (ps.lightLeft % 5) == 0)
     {
@@ -731,7 +769,6 @@ namespace scott
                (unsigned)ps.lightLeft);
       if (printStr) { printStr(buf); printStr("\n"); }
     }
-    (void)g;
   }
 
 }  // namespace scott

@@ -16,3 +16,6 @@ build/
 advgames/
 advgames.zip
 *.dat
+
+# Spec PDFs / extracted text fetched for reference
+.spec_ref.*

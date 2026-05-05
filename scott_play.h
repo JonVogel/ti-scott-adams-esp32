@@ -24,13 +24,15 @@ namespace scott
 {
   struct PlayState
   {
-    uint8_t  curRoom    = 0;
-    uint8_t  carryCount = 0;     // cached count of items with curLoc==CARRIED
-    uint16_t flags      = 0;     // 16 boolean flags, bit i set = flag i true
-    uint8_t  counter    = 0;     // primary counter (used by SET COUNT etc.)
-    uint8_t  savedRoom  = 0;     // for SWAP ROOM/SAVED action
-    uint16_t lightLeft  = 0;     // turns until lamp dies; 0 = light source dead
-    bool     gameOver   = false;
+    uint8_t  curRoom        = 0;
+    uint8_t  carryCount     = 0;   // cached count of items with curLoc==CARRIED
+    uint32_t flags          = 0;   // 32 boolean flags (bits 0..31)
+    int16_t  counter        = 0;   // main counter variable
+    uint8_t  savedRoom      = 0;   // main swap-room slot (opcode 80)
+    uint8_t  savedRooms[16] = {0}; // 16 saved rooms (opcode 87)
+    int16_t  savedCounters[16] = {0}; // 16 saved counters (opcode 81)
+    uint16_t lightLeft      = 0;   // turns until lamp dies
+    bool     gameOver       = false;
   };
 
   // Conventional location values. Items not in any room either sit in the
@@ -139,16 +141,62 @@ namespace scott
 
     if (w1[0] == '\0') return p;
 
+    // Direction shorthand has the highest priority. Per spec §6.7,
+    // single-letter cardinal directions (N S E W U D) ALWAYS map to
+    // (GO, direction) and cannot be overridden by the story file's
+    // verb list — so we match them before consulting verbs at all.
+    // We also accept the full names (NORTH, etc.) and prefix forms
+    // ("NO", "SOU") via the standard noun lookup below if the verb
+    // search fails.
+    if (w1[1] == '\0' && w2[0] == '\0')
+    {
+      static const char DIR_LETTERS[6] = { 'N', 'S', 'E', 'W', 'U', 'D' };
+      for (int d = 0; d < 6; d++)
+      {
+        if (w1[0] == DIR_LETTERS[d])
+        {
+          p.verbIdx = 1;        // GO
+          p.nounIdx = d + 1;    // 1..6 = N S E W U D
+          return p;
+        }
+      }
+    }
+
+    // Universal single-letter shortcuts (spec §6.7):
+    //   L → LOOK, I → INVENTORY, X → EXAMINE, Z → WAIT.
+    // Recommended only when the letter isn't already a defined verb
+    // in the story file — but in practice "L" causing LIGHT-like
+    // collisions is the more common nuisance, so we apply these
+    // unconditionally after the direction check.
+    if (w1[1] == '\0' && w2[0] == '\0')
+    {
+      const char* full = nullptr;
+      switch (w1[0])
+      {
+        case 'L': full = "LOOK"; break;
+        case 'I': full = "INVE"; break;
+        case 'X': full = "EXAM"; break;
+        case 'Z': full = "WAIT"; break;
+      }
+      if (full)
+      {
+        int idx = matchWord(g.verbs, g.h.numWords + 1, g.h.wordLen, full);
+        if (idx > 0) { p.verbIdx = idx; return p; }
+      }
+    }
+
     p.verbIdx = matchWord(g.verbs, g.h.numWords + 1, g.h.wordLen, w1);
     p.nounIdx = matchWord(g.nouns, g.h.numWords + 1, g.h.wordLen, w2);
 
-    // Single-word direction: "NORTH", "N", "U", etc. → (GO, direction).
+    // Multi-char direction word ("NORTH", "NO", "SOU") with no verb:
+    // re-route to (GO, direction). Single-letter forms were already
+    // handled above.
     if (p.verbIdx == 0 && w2[0] == '\0')
     {
       int dirIdx = matchWord(g.nouns, g.h.numWords + 1, g.h.wordLen, w1);
       if (dirIdx >= 1 && dirIdx <= 6)
       {
-        p.verbIdx = 1;        // GO
+        p.verbIdx = 1;
         p.nounIdx = dirIdx;
       }
     }
