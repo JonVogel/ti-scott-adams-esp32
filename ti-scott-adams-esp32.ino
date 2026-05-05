@@ -949,8 +949,22 @@ static void cmdLoad(const char* name)
 
 // Print a span of text with a temporary foreground color (1..16
 // palette index). Resets to default after.
+//
+// Has its own up-front word-wrap check so single-word colored spans
+// (like "WEST", "NORTH") drop to a new line cleanly when they would
+// overflow. printWrapped's space-lookahead can't help in that case,
+// because there's no space *before* the span — only after it.
 static void printColored(uint8_t fgIdx, const char* str)
 {
+  if (str && *str && *str != '\n')
+  {
+    int wlen = 0;
+    while (str[wlen] && str[wlen] != ' ' && str[wlen] != '\n') wlen++;
+    if (wlen > 0 && wlen <= COLS && cursorCol + wlen > COLS)
+    {
+      printChar('\n');
+    }
+  }
   uint8_t saved = currentPrintFg;
   currentPrintFg = fgIdx;
   printWrapped(str);
