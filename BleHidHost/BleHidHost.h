@@ -62,12 +62,33 @@ public:
 
   // Safe to call from any context (BLE notify callbacks, ISRs, etc.).
   // The actual transition runs from task() on the main loop.
-  static void requestPairingMode() { _pairingRequested = true; }
+  // User-initiated pairing — opens the window AND flags it so the
+  // application shows a takeover UI. For silent watchdog
+  // reconnections, use requestSilentScan() instead.
+  static void requestPairingMode() { _userInitiatedRequested = true; _pairingRequested = true; }
   static void requestUnpairAll()   { _unpairRequested  = true; }
 
   static bool isConnected();
   static bool isReady();
   static bool inPairingMode()  { return _pairingMode; }
+  // True only when the user explicitly asked for pairing (BOOT
+  // button / F12), not when a silent watchdog reconnect kicked off a
+  // scan window. Lets the application show a full-screen pairing UI
+  // for user-initiated requests while keeping background reconnects
+  // invisible.
+  static bool userInitiatedPairing() { return _pairingMode && _userInitiatedPairing; }
+  // Request a *silent* scan window — same machinery, but the
+  // userInitiatedPairing() flag stays false so the application can
+  // skip any UI takeover.
+  static void requestSilentScan() { _pairingRequested = true; }
+  // Milliseconds remaining in the current pairing window (0 if not
+  // pairing).
+  static unsigned long pairingRemainingMs()
+  {
+    if (!_pairingMode) return 0;
+    long remain = (long)(_pairingDeadline - millis());
+    return remain > 0 ? (unsigned long)remain : 0;
+  }
   static int  peerCount();   // number of currently-connected peers
 
 private:
@@ -89,6 +110,8 @@ private:
   static volatile bool _doScan;
   static volatile bool _pairingMode;
   static volatile bool _pairingRequested;
+  static volatile bool _userInitiatedRequested;
+  static volatile bool _userInitiatedPairing;
   static volatile bool _unpairRequested;
   static unsigned long _pairingDeadline;
   static uint32_t _pairingWindowMs;
@@ -107,6 +130,7 @@ private:
   static bool _addressIsAlreadyKnownOrConnected(const String& addr);
   static void _persistPeer(int slot);
   static void _loadAllPeers();
+  static void _bootButtonIsr();
 
   // Inner callback classes
   class ClientCallbacks;
@@ -124,8 +148,10 @@ inline BleHidHost::Peer BleHidHost::_peers[BleHidHost::MAX_PEERS];
 inline BleHidHost::ReportCallback BleHidHost::_cb = nullptr;
 inline volatile bool BleHidHost::_doScan            = false;
 inline volatile bool BleHidHost::_pairingMode       = false;
-inline volatile bool BleHidHost::_pairingRequested  = false;
-inline volatile bool BleHidHost::_unpairRequested   = false;
+inline volatile bool BleHidHost::_pairingRequested      = false;
+inline volatile bool BleHidHost::_userInitiatedRequested = false;
+inline volatile bool BleHidHost::_userInitiatedPairing  = false;
+inline volatile bool BleHidHost::_unpairRequested       = false;
 inline unsigned long BleHidHost::_pairingDeadline   = 0;
 inline uint32_t      BleHidHost::_pairingWindowMs   = 30000UL;
 
@@ -521,6 +547,12 @@ inline void BleHidHost::begin(const char* deviceName, const char* nvsNamespace)
   _doScan = true;
 
   pinMode(_bootButtonPin, INPUT_PULLUP);
+  // Attach falling-edge ISR so a BOOT-button press anywhere — even
+  // when the main loop is held up by something else — sets the
+  // pairing-request flag immediately. The actual BLE work runs in
+  // the next task() call (BLE stack APIs aren't ISR-safe).
+  attachInterrupt(digitalPinToInterrupt(_bootButtonPin),
+                  _bootButtonIsr, FALLING);
   Serial.println("BleHidHost: scanning...");
 }
 
@@ -567,6 +599,12 @@ inline void BleHidHost::task()
   if (_pairingRequested)
   {
     _pairingRequested = false;
+    // Latch user-initiated flag at the time the window opens. Both
+    // BOOT-button-ISR and F12 set _userInitiatedRequested; the
+    // watchdog clears it before requesting via requestSilentScan()
+    // (which only sets _pairingRequested).
+    _userInitiatedPairing = _userInitiatedRequested;
+    _userInitiatedRequested = false;
     enterPairingMode(_pairingWindowMs);
   }
   if (_unpairRequested)
@@ -589,25 +627,7 @@ inline void BleHidHost::task()
   {
     Serial.println("BleHidHost: pairing window expired.");
     _pairingMode = false;
-  }
-
-  // Close pairing mode early once any peer has finished pairing and
-  // become ready. Otherwise the 30s window stays open and an unrelated
-  // nearby BLE HID can squat on a free slot — observed in the wild
-  // with a stray "Q352020" device joining seconds after the legit
-  // keyboard paired, which then choked the BLE stack and starved
-  // reports from the real keyboard.
-  if (_pairingMode)
-  {
-    for (int i = 0; i < MAX_PEERS; i++)
-    {
-      if (_peers[i].connected && _peers[i].ready)
-      {
-        Serial.println("BleHidHost: pairing complete; closing window.");
-        _pairingMode = false;
-        break;
-      }
-    }
+    _userInitiatedPairing = false;
   }
 
   // Only scan while in pairing mode. Previously we also scanned
@@ -626,14 +646,18 @@ inline void BleHidHost::task()
     _doScan = true;
   }
 
-  // BOOT button → request pairing.
-  if (digitalRead(_bootButtonPin) == LOW)
-  {
-    delay(50);
-    if (digitalRead(_bootButtonPin) == LOW)
-    {
-      enterPairingMode(_pairingWindowMs);
-      while (digitalRead(_bootButtonPin) == LOW) { delay(50); }
-    }
-  }
+  // BOOT button is now ISR-driven — _bootButtonIsr sets
+  // _pairingRequested directly. Nothing to poll here.
+}
+
+// ISR for the BOOT button. Just flag the request — actual BLE work
+// happens on the next task() call. Not IRAM_ATTR because the volatile
+// flag we touch lives in flash; the linker rejects mixed IRAM/flash
+// access. Acceptable since BOOT-press timing isn't critical and we
+// won't be in the middle of a flash write when the user prods it.
+inline void BleHidHost::_bootButtonIsr()
+{
+  // Idempotent flag set; bounce-safe because re-asserting it has no
+  // effect.
+  _pairingRequested = true;
 }
