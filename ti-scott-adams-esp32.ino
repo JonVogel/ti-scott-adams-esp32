@@ -40,14 +40,17 @@
 // ---------------------------------------------------------------------------
 #define TFT_BL 2
 
-#define COLS       32
+// Scott Adams uses a 40-column screen instead of TI's 32 — the
+// adventures' room descriptions and item lists fit nicer that way.
+// (Not TI-faithful, but better UX for the actual game text.)
+#define COLS       40
 #define ROWS       24
 #define CHAR_W     16
 #define CHAR_H     16
 #define SCREEN_W   800
 #define SCREEN_H   480
 
-#define DISPLAY_X_OFFSET ((SCREEN_W - COLS * CHAR_W) / 2)            // 144
+#define DISPLAY_X_OFFSET ((SCREEN_W - COLS * CHAR_W) / 2)            // 80
 #define DISPLAY_Y_OFFSET (((SCREEN_H - ROWS * CHAR_H) / 2) - 8)      // 40
 
 #define BORDER_W       8
