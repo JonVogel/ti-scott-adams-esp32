@@ -135,6 +135,7 @@ private:
   // Inner callback classes
   class ClientCallbacks;
   class ScanCallbacks;
+  class SecurityCallbacks;
 };
 
 // ---------------------------------------------------------------------------
@@ -350,6 +351,14 @@ class BleHidHost::ScanCallbacks : public BLEAdvertisedDeviceCallbacks
         "8Bit", "8bit", "Zero", "SN30", "Gamepad", "gamepad",
         "Joystick", "joystick", "Pro Controller", "DualSense",
         "DualShock", "Xbox", "Keyboard", "keyboard", "Mouse",
+        // Apple keyboards: "Magic Keyboard" matches "Keyboard"
+        // already, but legacy "Apple Wireless Keyboard" likewise
+        // does — adding bare "Magic" / "Apple" / "iPad" / "iMac"
+        // covers any short-form names we haven't seen.
+        "Magic", "Apple", "iPad", "iMac",
+        // Third-party BLE keyboards that advertise with a vendor /
+        // model name and no HID UUID in the primary packet.
+        "OMOTON", "Omoton", "KB066",
         // 8BitDo internal model codes that appear instead of the
         // friendly name on BLE: Q35 = Zero 2.
         "Q35"
@@ -360,14 +369,36 @@ class BleHidHost::ScanCallbacks : public BLEAdvertisedDeviceCallbacks
       }
     }
 
-    // Scan-spam debug — enable when troubleshooting which devices
-    // are visible during pairing.
-#if 0
+    // Scan-spam debug. On while we're chasing an Apple keyboard that
+    // isn't being detected — flip back to #if 0 once the issue is
+    // pinned down so we don't fill the serial monitor every pairing
+    // window. Includes service UUIDs and manufacturer ID so we can
+    // identify HID devices that advertise with an empty name.
+#if 1
     if (_pairingMode)
     {
-      Serial.printf("BleHidHost: scan saw %s name='%s' hid=%d hint=%d\n",
+      int uuidCount = ad.getServiceUUIDCount();
+      char uuids[120] = {0};
+      int upos = 0;
+      for (int i = 0; i < uuidCount && upos < (int)sizeof(uuids) - 8; i++)
+      {
+        String s = ad.getServiceUUID(i).toString().c_str();
+        upos += snprintf(uuids + upos, sizeof(uuids) - upos,
+                         "%s%s", upos ? "," : "", s.c_str());
+      }
+      uint16_t mfg = 0;
+      if (ad.haveManufacturerData())
+      {
+        String md = ad.getManufacturerData().c_str();
+        if (md.length() >= 2)
+        {
+          mfg = ((uint8_t)md[1] << 8) | (uint8_t)md[0];
+        }
+      }
+      Serial.printf("BleHidHost: scan saw %s name='%s' hid=%d hint=%d uuids=%d[%s] mfg=0x%04x\n",
                     addr.c_str(), name.c_str(),
-                    isHid ? 1 : 0, nameLooksHid ? 1 : 0);
+                    isHid ? 1 : 0, nameLooksHid ? 1 : 0,
+                    uuidCount, uuids, mfg);
     }
 #endif
 
@@ -411,6 +442,54 @@ class BleHidHost::ScanCallbacks : public BLEAdvertisedDeviceCallbacks
     _peers[slot].target = new BLEAdvertisedDevice(ad);
     _peers[slot].doConnect = true;
   }
+};
+
+// Pairing security callbacks. We declare ESP_IO_CAP_OUT (host can
+// display) so that keyboards which insist on Passkey-Entry pairing
+// (OMOTON KB066, certain Apple keyboards, anything that wants real
+// MITM protection) get a 6-digit code generated for them. The user
+// sees the code on serial / screen and types it on the keyboard.
+//
+// For "Just Works" peripherals (8BitDo Zero 2, ProtoArc L75 in its
+// default mode, etc.) the negotiation falls back to no-passkey since
+// they don't request MITM — so existing devices keep pairing the
+// same way they always have.
+class BleHidHost::SecurityCallbacks : public BLESecurityCallbacks
+{
+  uint32_t onPassKeyRequest() override
+  {
+    // Peer wants us to enter a passkey it's displaying. Our hosts
+    // are headless from the BLE-stack's view, so this case shouldn't
+    // arise with our IO_CAP_OUT setting. Return 0 if it does.
+    Serial.println("BleHidHost: peer requested passkey input — not supported.");
+    return 0;
+  }
+
+  void onPassKeyNotify(uint32_t pass_key) override
+  {
+    Serial.printf("\n"
+                  "==========================================\n"
+                  "BleHidHost: PAIRING PASSKEY  %06lu\n"
+                  "Type those 6 digits on the keyboard then\n"
+                  "press Enter to complete pairing.\n"
+                  "==========================================\n",
+                  (unsigned long)pass_key);
+  }
+
+  bool onSecurityRequest() override { return true; }
+
+  bool onConfirmPIN(uint32_t pin) override
+  {
+    Serial.printf("BleHidHost: confirm PIN %06lu (auto-accepting).\n",
+                  (unsigned long)pin);
+    return true;
+  }
+
+  // onAuthenticationComplete deliberately not overridden — its
+  // signature references esp_ble_auth_cmpl_t which lives in
+  // esp_gap_ble_api.h, and that header's path is awkward to add to
+  // an Arduino library. The base class's default implementation
+  // already prints success/failure to Serial on Bluedroid.
 };
 
 // ---------------------------------------------------------------------------
@@ -531,18 +610,32 @@ inline void BleHidHost::begin(const char* deviceName, const char* nvsNamespace)
 
   BLEDevice::init(deviceName);
   BLESecurity* pSecurity = new BLESecurity();
-  pSecurity->setCapability(ESP_IO_CAP_NONE);
+  // ESP_IO_CAP_OUT lets us do Passkey Entry when the peer requires
+  // it (OMOTON-style keyboards). For peers that don't request MITM,
+  // pairing falls back to Just Works as before.
+  pSecurity->setCapability(ESP_IO_CAP_OUT);
   pSecurity->setAuthenticationMode(true, false, true);
-  // Default security callbacks — required on some boards for bonding
-  // to complete before service discovery, otherwise HID keyboards like
-  // the L75 expose only generic services on first connect.
-  BLEDevice::setSecurityCallbacks(new BLESecurityCallbacks());
+  // Custom security callbacks: print any generated passkey to Serial
+  // so the user can type it on the keyboard.
+  BLEDevice::setSecurityCallbacks(new SecurityCallbacks());
 
   BLEScan* pScan = BLEDevice::getScan();
   pScan->setAdvertisedDeviceCallbacks(new ScanCallbacks());
-  pScan->setInterval(1349);
-  pScan->setWindow(449);
-  pScan->setActiveScan(true);
+  // 100% duty cycle (window == interval). The previous 33% was
+  // missing peripherals whose advertising interval didn't line up
+  // with our listen windows — observed with an OMOTON KB066. Since
+  // our scans only run during the pairing window (e0e2898 fix), the
+  // higher duty doesn't burn radio time when idle.
+  pScan->setInterval(160);   // 100 ms (units of 0.625 ms)
+  pScan->setWindow(160);     // 100 ms = continuous listen
+  // Passive scan: just listen, never send scan requests. Some
+  // peripherals (OMOTON KB066 observed) won't deliver primary
+  // adv packets reliably to scanners that probe them with active
+  // requests — even though Windows / iPhone see them fine. If we
+  // need scan-response data later we can flip this back, but it
+  // costs us nothing for keyboards that put HID UUID or name
+  // directly in the primary advertisement.
+  pScan->setActiveScan(false);
   pScan->start(5, false);
   _doScan = true;
 
