@@ -120,6 +120,11 @@ private:
   static volatile bool _unpairRequested;
   static unsigned long _pairingDeadline;
   static uint32_t _pairingWindowMs;
+  // Number of connected peers at the moment pairing was last opened.
+  // The "close-on-first-ready-peer" early-exit only fires when the
+  // current peer count exceeds this — so opening pairing while a
+  // device is already connected doesn't trip the exit immediately.
+  static int _pairingStartPeerCount;
 
   static Preferences _prefs;
   static const char* _nvsNamespace;
@@ -158,6 +163,7 @@ inline volatile bool BleHidHost::_userInitiatedPairing    = false;
 inline volatile bool BleHidHost::_unpairRequested         = false;
 inline unsigned long BleHidHost::_pairingDeadline         = 0;
 inline uint32_t      BleHidHost::_pairingWindowMs         = 30000UL;
+inline int           BleHidHost::_pairingStartPeerCount   = 0;
 
 inline Preferences BleHidHost::_prefs;
 inline const char* BleHidHost::_nvsNamespace = "blehidhost";
@@ -634,6 +640,7 @@ inline void BleHidHost::enterPairingMode(uint32_t windowMs)
   _pairingMode = true;
   _pairingWindowMs = windowMs;
   _pairingDeadline = millis() + windowMs;
+  _pairingStartPeerCount = peerCount();
 
   NimBLEScan* pScan = NimBLEDevice::getScan();
   pScan->stop();
@@ -704,10 +711,13 @@ inline void BleHidHost::task()
     NimBLEDevice::getScan()->stop();
   }
 
-  // Close pairing mode early once any peer has finished pairing and
-  // become ready. Otherwise the 30s window stays open and an unrelated
-  // nearby BLE HID can squat on a free slot.
-  if (_pairingMode)
+  // Close pairing mode early once a NEW peer has paired and become
+  // ready (the count of connected peers exceeds what we had when the
+  // window opened). The new-vs-existing distinction is important —
+  // opening pairing for a second device while one is already
+  // connected used to insta-close because the existing device was
+  // already in the connected+ready state.
+  if (_pairingMode && peerCount() > _pairingStartPeerCount)
   {
     for (int i = 0; i < MAX_PEERS; i++)
     {
