@@ -1417,8 +1417,13 @@ void setup()
     }
   }
 
-  if (fio::beginSD(/*cs=*/10, /*sck=*/12, /*miso=*/13, /*mosi=*/11))
+  // Bring up SD over SPI on the 8048S043's TF slot. file_io is now
+  // hardware-agnostic, so we init SPI+SD here and hand the fs::FS to
+  // fio::setSDFs() to route SDCARD.* operations through it.
+  SPI.begin(/*sck=*/12, /*miso=*/13, /*mosi=*/11, /*cs=*/10);
+  if (SD.begin(/*cs=*/10, SPI))
   {
+    fio::setSDFs(&SD);
     Serial.println("SD card mounted.");
   }
   else

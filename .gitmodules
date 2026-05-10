@@ -1,0 +1,9 @@
+[submodule "ESP32_File_Handling"]
+	path = ESP32_File_Handling
+	url = https://github.com/JonVogel/ESP32_File_Handling.git
+[submodule "BleHidHost"]
+	path = BleHidHost
+	url = https://github.com/JonVogel/BleHidHost.git
+[submodule "TI_Font"]
+	path = TI_Font
+	url = https://github.com/JonVogel/TI_Font.git
